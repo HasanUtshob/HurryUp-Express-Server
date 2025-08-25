@@ -420,7 +420,7 @@ app.patch("/bookings/:id/assign-agent", async (req, res) => {
           assignedAt: new Date(),
           assignedBy: deliveryAgent.assignedBy || "admin",
         },
-        status: status || "PickedUp",
+        status: status || "pickedUp",
         updatedAt: new Date(),
       },
     };
@@ -465,19 +465,16 @@ app.patch("/bookings/:id/deliveryStatus", async (req, res) => {
     // normalize inputs
     const statusMap = {
       pending: "pending",
-      "picked-up": "PickedUp",
-      pickup: "PickedUp",
-      pickedup: "PickedUp",
+      "picked-up": "pickedUp",
+      pickedup: "pickedUp",
       "in-transit": "in-transit",
       intransit: "in-transit",
       delivered: "delivered",
-      deliverd: "delivered",
-      failed: "faild",
-      faild: "faild",
+      failed: "failed",
     };
     const incoming = String(req.body.deliveryStatus || "").toLowerCase();
     const mapped = statusMap[incoming];
-    const valid = ["pending", "PickedUp", "in-transit", "delivered", "faild"];
+    const valid = ["pending", "pickedUp", "in-transit", "delivered", "failed"];
     if (!mapped || !valid.includes(mapped)) {
       return res
         .status(400)
@@ -489,7 +486,7 @@ app.patch("/bookings/:id/deliveryStatus", async (req, res) => {
       status: mapped,
       updatedAt: new Date(),
     };
-    if (mapped === "faild") {
+    if (mapped === "failed") {
       if (req.body.failureReason?.trim())
         $set.failureReason = req.body.failureReason.trim();
       $set.failedAt = new Date();
@@ -523,7 +520,7 @@ app.patch("/bookings/:id/deliveryStatus", async (req, res) => {
           subject: `Delivered – ${updated.bookingId}`,
           html: emailTpl.statusDelivered(updated),
         });
-      } else if (updated.status === "faild") {
+      } else if (updated.status === "failed") {
         await mailer.send({
           to: emailTo,
           subject: `Delivery Failed – ${updated.bookingId}`,
@@ -845,11 +842,11 @@ app.get("/analytics/delivery-stats", async (req, res) => {
           inTransit: {
             $sum: { $cond: [{ $eq: ["$status", "in-transit"] }, 1, 0] },
           },
-          faild: {
-            $sum: { $cond: [{ $eq: ["$status", "faild"] }, 1, 0] },
+          failed: {
+            $sum: { $cond: [{ $eq: ["$status", "failed"] }, 1, 0] },
           },
           pickedUp: {
-            $sum: { $cond: [{ $eq: ["$status", "PickedUp"] }, 1, 0] },
+            $sum: { $cond: [{ $eq: ["$status", "pickedUp"] }, 1, 0] },
           },
         },
       },
@@ -861,7 +858,7 @@ app.get("/analytics/delivery-stats", async (req, res) => {
       delivered: 0,
       pending: 0,
       inTransit: 0,
-      faild: 0,
+      failed: 0,
       pickedUp: 0,
     };
 
