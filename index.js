@@ -67,50 +67,115 @@ const mailer = (() => {
 })();
 
 /* ------- ছোট ইমেইল টেমপ্লেটগুলো ------- */
+// const emailTpl = {
+//   registration: (user) => `
+//     <div style="font-family:Arial">
+//       <h2>🎉 রেজিস্ট্রেশন সফল হয়েছে, ${user?.name || "ব্যবহারকারী"}!</h2>
+//       <p>আপনি HurryUp Express-এ সফলভাবে রেজিস্ট্রেশন করেছেন।</p>
+//       <p>একাউন্ট: <b>${user?.email || user?.phone || ""}</b></p>
+//       <hr/><small>ধন্যবাদ।</small>
+//     </div>`,
+
+//   bookingCreated: (bk) => `
+//     <div style="font-family:Arial">
+//       <h2>✅ বুকিং কনফার্মড</h2>
+//       <p>বুকিং আইডি: <b>${bk.bookingId}</b></p>
+//       <p>পিকআপ: ${bk.pickupAddress}</p>
+//       <p>ডেলিভারি: ${bk.deliveryAddress}</p>
+//       <p>স্ট্যাটাস: ${bk.status}</p>
+//       <p>মোট চার্জ: ${bk.totalCharge}৳ (ডেলিভারি চার্জ: ${bk.deliveryCharge}৳)</p>
+//       <hr/><small>লাইভ ট্র্যাকিংয়ের জন্য Track Parcel পেজ দেখুন।</small>
+//     </div>`,
+
+//   statusTransit: (bk) => `
+//     <div style="font-family:Arial">
+//       <h2>🚚 আপনার পার্সেল রওনা হয়েছে</h2>
+//       <p>বুকিং আইডি: <b>${bk.bookingId}</b></p>
+//       <p>এখন স্ট্যাটাস: <b>In-Transit</b></p>
+//       <p>এজেন্ট: ${bk?.deliveryAgent?.name || "Assigned"}</p>
+//       <hr/><small>লাইভ লোকেশন Track পেজে দেখুন।</small>
+//     </div>`,
+
+//   statusDelivered: (bk) => `
+//     <div style="font-family:Arial">
+//       <h2>📦 ডেলিভারি সম্পন্ন</h2>
+//       <p>বুকিং আইডি: <b>${bk.bookingId}</b></p>
+//       <p>স্ট্যাটাস: <b>Delivered</b></p>
+//       <hr/><small>ধন্যবাদ।</small>
+//     </div>`,
+
+//   statusFailed: (bk, reason) => `
+//     <div style="font-family:Arial">
+//       <h2>⚠️ ডেলিভারি ব্যর্থ</h2>
+//       <p>বুকিং আইডি: <b>${bk.bookingId}</b></p>
+//       <p>স্ট্যাটাস: <b>Failed</b></p>
+//       <p>কারণ: <b>${reason || "উল্লেখ নেই"}</b></p>
+//       <hr/><small>সাপোর্টের সাথে যোগাযোগ করুন।</small>
+//     </div>`,
+// };
+
 const emailTpl = {
   registration: (user) => `
-    <div style="font-family:Arial">
-      <h2>🎉 রেজিস্ট্রেশন সফল হয়েছে, ${user?.name || "ব্যবহারকারী"}!</h2>
-      <p>আপনি HurryUp Express-এ সফলভাবে রেজিস্ট্রেশন করেছেন।</p>
-      <p>একাউন্ট: <b>${user?.email || user?.phone || ""}</b></p>
-      <hr/><small>ধন্যবাদ।</small>
+    <div style="font-family:Arial,sans-serif;background:#f9fafb;padding:20px">
+      <div style="max-width:600px;margin:auto;background:white;border-radius:12px;padding:24px;box-shadow:0 4px 10px rgba(0,0,0,0.08)">
+        <h2 style="color:#2563eb">🎉 রেজিস্ট্রেশন সফল!</h2>
+        <p>হ্যালো, <b>${user?.name || "ব্যবহারকারী"}</b> 👋</p>
+        <p>আপনি HurryUp Express-এ সফলভাবে রেজিস্ট্রেশন করেছেন।</p>
+        <p>একাউন্ট: <b style="color:#111827">${
+          user?.email || user?.phone || ""
+        }</b></p>
+        <hr style="margin:20px 0;border:none;border-top:1px solid #e5e7eb"/>
+        <p style="font-size:13px;color:#6b7280">ধন্যবাদ আমাদের সাথে যুক্ত হওয়ার জন্য।</p>
+      </div>
     </div>`,
 
   bookingCreated: (bk) => `
-    <div style="font-family:Arial">
-      <h2>✅ বুকিং কনফার্মড</h2>
-      <p>বুকিং আইডি: <b>${bk.bookingId}</b></p>
-      <p>পিকআপ: ${bk.pickupAddress}</p>
-      <p>ডেলিভারি: ${bk.deliveryAddress}</p>
-      <p>স্ট্যাটাস: ${bk.status}</p>
-      <p>মোট চার্জ: ${bk.totalCharge}৳ (ডেলিভারি চার্জ: ${bk.deliveryCharge}৳)</p>
-      <hr/><small>লাইভ ট্র্যাকিংয়ের জন্য Track Parcel পেজ দেখুন।</small>
+    <div style="font-family:Arial,sans-serif;background:#f9fafb;padding:20px">
+      <div style="max-width:600px;margin:auto;background:white;border-radius:12px;padding:24px;box-shadow:0 4px 10px rgba(0,0,0,0.08)">
+        <h2 style="color:#16a34a">✅ বুকিং কনফার্মড</h2>
+        <p>বুকিং আইডি: <b>${bk.bookingId}</b></p>
+        <p>📍 পিকআপ: ${bk.pickupAddress}</p>
+        <p>🎯 ডেলিভারি: ${bk.deliveryAddress}</p>
+        <p>📦 স্ট্যাটাস: <b>${bk.status}</b></p>
+        <p>💰 মোট চার্জ: <b>${bk.totalCharge}৳</b> (ডেলিভারি চার্জ: ${bk.deliveryCharge}৳)</p>
+        <hr style="margin:20px 0;border:none;border-top:1px solid #e5e7eb"/>
+        <p style="font-size:13px;color:#6b7280">লাইভ ট্র্যাকিং দেখতে <b>Track Parcel</b> পেজে যান।</p>
+      </div>
     </div>`,
 
   statusTransit: (bk) => `
-    <div style="font-family:Arial">
-      <h2>🚚 আপনার পার্সেল রওনা হয়েছে</h2>
-      <p>বুকিং আইডি: <b>${bk.bookingId}</b></p>
-      <p>এখন স্ট্যাটাস: <b>In-Transit</b></p>
-      <p>এজেন্ট: ${bk?.deliveryAgent?.name || "Assigned"}</p>
-      <hr/><small>লাইভ লোকেশন Track পেজে দেখুন।</small>
+    <div style="font-family:Arial,sans-serif;background:#f9fafb;padding:20px">
+      <div style="max-width:600px;margin:auto;background:white;border-radius:12px;padding:24px;box-shadow:0 4px 10px rgba(0,0,0,0.08)">
+        <h2 style="color:#f59e0b">🚚 আপনার পার্সেল রওনা হয়েছে</h2>
+        <p>বুকিং আইডি: <b>${bk.bookingId}</b></p>
+        <p>বর্তমান স্ট্যাটাস: <b style="color:#f59e0b">In-Transit</b></p>
+        <p>এজেন্ট: <b>${bk?.deliveryAgent?.name || "Assigned"}</b></p>
+        <hr style="margin:20px 0;border:none;border-top:1px solid #e5e7eb"/>
+        <p style="font-size:13px;color:#6b7280">আপনার পার্সেলের লাইভ লোকেশন <b>Track Parcel</b> পেজে দেখুন।</p>
+      </div>
     </div>`,
 
   statusDelivered: (bk) => `
-    <div style="font-family:Arial">
-      <h2>📦 ডেলিভারি সম্পন্ন</h2>
-      <p>বুকিং আইডি: <b>${bk.bookingId}</b></p>
-      <p>স্ট্যাটাস: <b>Delivered</b></p>
-      <hr/><small>ধন্যবাদ।</small>
+    <div style="font-family:Arial,sans-serif;background:#f9fafb;padding:20px">
+      <div style="max-width:600px;margin:auto;background:white;border-radius:12px;padding:24px;box-shadow:0 4px 10px rgba(0,0,0,0.08)">
+        <h2 style="color:#10b981">📦 ডেলিভারি সম্পন্ন</h2>
+        <p>বুকিং আইডি: <b>${bk.bookingId}</b></p>
+        <p>স্ট্যাটাস: <b style="color:#10b981">Delivered</b></p>
+        <hr style="margin:20px 0;border:none;border-top:1px solid #e5e7eb"/>
+        <p style="font-size:13px;color:#6b7280">আমাদের সার্ভিস ব্যবহারের জন্য ধন্যবাদ।</p>
+      </div>
     </div>`,
 
   statusFailed: (bk, reason) => `
-    <div style="font-family:Arial">
-      <h2>⚠️ ডেলিভারি ব্যর্থ</h2>
-      <p>বুকিং আইডি: <b>${bk.bookingId}</b></p>
-      <p>স্ট্যাটাস: <b>Failed</b></p>
-      <p>কারণ: <b>${reason || "উল্লেখ নেই"}</b></p>
-      <hr/><small>সাপোর্টের সাথে যোগাযোগ করুন।</small>
+    <div style="font-family:Arial,sans-serif;background:#f9fafb;padding:20px">
+      <div style="max-width:600px;margin:auto;background:white;border-radius:12px;padding:24px;box-shadow:0 4px 10px rgba(0,0,0,0.08)">
+        <h2 style="color:#ef4444">⚠️ ডেলিভারি ব্যর্থ</h2>
+        <p>বুকিং আইডি: <b>${bk.bookingId}</b></p>
+        <p>স্ট্যাটাস: <b style="color:#ef4444">Failed</b></p>
+        <p>কারণ: <b>${reason || "উল্লেখ নেই"}</b></p>
+        <hr style="margin:20px 0;border:none;border-top:1px solid #e5e7eb"/>
+        <p style="font-size:13px;color:#6b7280">বিস্তারিত জানার জন্য সাপোর্ট টিমের সাথে যোগাযোগ করুন।</p>
+      </div>
     </div>`,
 };
 
@@ -352,15 +417,29 @@ app.get("/bookings/public/:trackingId", async (req, res) => {
     const booking = await bookingsCollection().findOne({
       bookingId: trackingId,
     });
-    if (!booking)
+    if (!booking) {
       return res
         .status(404)
         .send({ success: false, message: "Tracking ID not found" });
+    }
+
+    // normalize
+    const normalizeStatus = (s = "") => {
+      const x = String(s).toLowerCase().trim();
+      if (["booked", "pending"].includes(x)) return "pending";
+      if (["pickup", "pickedup", "picked-up"].includes(x)) return "picked-up";
+      if (["intransit", "in-transit"].includes(x)) return "in-transit";
+      if (["deliverd", "delivered"].includes(x)) return "delivered";
+      if (["faild", "failed"].includes(x)) return "failed";
+      return "pending";
+    };
+    const statusRaw = booking.status || booking.deliveryStatus;
+    const status = normalizeStatus(statusRaw);
 
     const publicData = {
       bookingId: booking.bookingId,
-      status: booking.status || booking.deliveryStatus,
-      deliveryStatus: booking.deliveryStatus,
+      status,
+      deliveryStatus: status,
       pickupAddress: booking.pickupAddress,
       deliveryAddress: booking.deliveryAddress,
       parcelType: booking.parcelType,
@@ -376,7 +455,7 @@ app.get("/bookings/public/:trackingId", async (req, res) => {
       updatedAt: booking.updatedAt,
     };
     res.status(200).send({ success: true, data: publicData });
-  } catch {
+  } catch (e) {
     res
       .status(500)
       .send({ success: false, message: "Failed to retrieve tracking info" });
@@ -420,7 +499,8 @@ app.patch("/bookings/:id/assign-agent", async (req, res) => {
           assignedAt: new Date(),
           assignedBy: deliveryAgent.assignedBy || "admin",
         },
-        status: status || "pickedUp",
+        status: "picked-up",
+        deliveryStatus: "picked-up",
         updatedAt: new Date(),
       },
     };
