@@ -15,13 +15,104 @@ const PORT = process.env.PORT || 5000;
 // Frontend origin (Firebase Hosting / Vercel) – env এ সেট দেবে
 const CLIENT_ORIGIN =
   process.env.CLIENT_ORIGIN || "https://hurryup-e4338.web.app";
-// Mongo URI (Atlas) – MONGO_URI সরাসরি দাও, না হলে DB_USER/DB_PASS থেকে বানাবে
 
+// Mongo URI (Atlas)
 const MONGO_URI = process.env.MONGO_URI;
 if (!MONGO_URI) {
   console.error("❌ Missing MONGO_URI. Set it in your .env / server env.");
   process.exit(1);
 }
+
+/* =========================
+   1.1) Mailer (Resend)
+========================= */
+// Note: Node 18+ এ global fetch আছে
+const mailer = (() => {
+  const enabled =
+    String(process.env.MAIL_ENABLED || "false").toLowerCase() === "true";
+  if (!enabled) {
+    return {
+      send: async () =>
+        console.log("[MAIL] disabled; set MAIL_ENABLED=true to enable"),
+    };
+  }
+  const RESEND_API_KEY = process.env.RESEND_API_KEY;
+  const FROM =
+    process.env.MAIL_FROM || "HurryUp Express <onboarding@resend.dev>";
+  if (!RESEND_API_KEY) {
+    console.warn("⚠️ Missing RESEND_API_KEY. Emails will fail. Set it in .env");
+  }
+  return {
+    /**
+     * send({ to, subject, html, text })
+     */
+    send: async ({ to, subject, html, text }) => {
+      try {
+        const res = await fetch("https://api.resend.com/emails", {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${RESEND_API_KEY}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ from: FROM, to, subject, html, text }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(JSON.stringify(data));
+        console.log("[MAIL] sent:", data.id || data);
+      } catch (err) {
+        console.error("[MAIL] failed:", err.message);
+      }
+    },
+  };
+})();
+
+/* ------- ছোট ইমেইল টেমপ্লেটগুলো ------- */
+const emailTpl = {
+  registration: (user) => `
+    <div style="font-family:Arial">
+      <h2>🎉 রেজিস্ট্রেশন সফল হয়েছে, ${user?.name || "ব্যবহারকারী"}!</h2>
+      <p>আপনি HurryUp Express-এ সফলভাবে রেজিস্ট্রেশন করেছেন।</p>
+      <p>একাউন্ট: <b>${user?.email || user?.phone || ""}</b></p>
+      <hr/><small>ধন্যবাদ।</small>
+    </div>`,
+
+  bookingCreated: (bk) => `
+    <div style="font-family:Arial">
+      <h2>✅ বুকিং কনফার্মড</h2>
+      <p>বুকিং আইডি: <b>${bk.bookingId}</b></p>
+      <p>পিকআপ: ${bk.pickupAddress}</p>
+      <p>ডেলিভারি: ${bk.deliveryAddress}</p>
+      <p>স্ট্যাটাস: ${bk.status}</p>
+      <p>মোট চার্জ: ${bk.totalCharge}৳ (ডেলিভারি চার্জ: ${bk.deliveryCharge}৳)</p>
+      <hr/><small>লাইভ ট্র্যাকিংয়ের জন্য Track Parcel পেজ দেখুন।</small>
+    </div>`,
+
+  statusTransit: (bk) => `
+    <div style="font-family:Arial">
+      <h2>🚚 আপনার পার্সেল রওনা হয়েছে</h2>
+      <p>বুকিং আইডি: <b>${bk.bookingId}</b></p>
+      <p>এখন স্ট্যাটাস: <b>In-Transit</b></p>
+      <p>এজেন্ট: ${bk?.deliveryAgent?.name || "Assigned"}</p>
+      <hr/><small>লাইভ লোকেশন Track পেজে দেখুন।</small>
+    </div>`,
+
+  statusDelivered: (bk) => `
+    <div style="font-family:Arial">
+      <h2>📦 ডেলিভারি সম্পন্ন</h2>
+      <p>বুকিং আইডি: <b>${bk.bookingId}</b></p>
+      <p>স্ট্যাটাস: <b>Delivered</b></p>
+      <hr/><small>ধন্যবাদ।</small>
+    </div>`,
+
+  statusFailed: (bk, reason) => `
+    <div style="font-family:Arial">
+      <h2>⚠️ ডেলিভারি ব্যর্থ</h2>
+      <p>বুকিং আইডি: <b>${bk.bookingId}</b></p>
+      <p>স্ট্যাটাস: <b>Failed</b></p>
+      <p>কারণ: <b>${reason || "উল্লেখ নেই"}</b></p>
+      <hr/><small>সাপোর্টের সাথে যোগাযোগ করুন।</small>
+    </div>`,
+};
 
 /* =========================
    2) Middlewares
@@ -116,7 +207,18 @@ const calculateDeliveryCharge = (zipCode, weight) => {
 ========================= */
 /* ---- Users ---- */
 app.post("/users", async (req, res) => {
-  const result = await usersCollection().insertOne(req.body);
+  const user = req.body;
+  const result = await usersCollection().insertOne(user);
+
+  // Registration email
+  if (user?.email) {
+    await mailer.send({
+      to: user.email,
+      subject: "Registration Successful – HurryUp Express",
+      html: emailTpl.registration(user),
+    });
+  }
+
   res.send(result);
 });
 
@@ -200,6 +302,16 @@ app.post("/bookings", async (req, res) => {
     booking.chargeBreakdown = calc;
 
     const result = await bookingsCollection().insertOne(booking);
+
+    // Booking confirmation email (তোমার data structure অনুযায়ী customer email = booking.email)
+    if (booking?.email) {
+      await mailer.send({
+        to: booking.email,
+        subject: `Booking Confirmed – ${booking.bookingId}`,
+        html: emailTpl.bookingCreated(booking),
+      });
+    }
+
     res.status(201).send({
       success: true,
       data: {
@@ -395,6 +507,32 @@ app.patch("/bookings/:id/deliveryStatus", async (req, res) => {
     const updated = await bookingsCollection().findOne({
       _id: new ObjectId(_id),
     });
+
+    // ===== Email hooks =====
+    const emailTo = updated?.email; // তোমার ডাটায় customer email = booking.email
+    if (emailTo) {
+      if (updated.status === "in-transit") {
+        await mailer.send({
+          to: emailTo,
+          subject: `Your parcel is in-transit – ${updated.bookingId}`,
+          html: emailTpl.statusTransit(updated),
+        });
+      } else if (updated.status === "delivered") {
+        await mailer.send({
+          to: emailTo,
+          subject: `Delivered – ${updated.bookingId}`,
+          html: emailTpl.statusDelivered(updated),
+        });
+      } else if (updated.status === "faild") {
+        await mailer.send({
+          to: emailTo,
+          subject: `Delivery Failed – ${updated.bookingId}`,
+          html: emailTpl.statusFailed(updated, updated.failureReason),
+        });
+      }
+    }
+    // ===== /Email hooks =====
+
     res.status(200).send({
       success: true,
       data: {
