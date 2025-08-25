@@ -462,19 +462,20 @@ app.patch("/bookings/:id/deliveryStatus", async (req, res) => {
         .status(400)
         .send({ success: false, message: "Invalid booking ID" });
 
-    // normalize inputs
+    // normalize inputs - use consistent hyphenated status names
     const statusMap = {
       pending: "pending",
-      "picked-up": "pickedUp",
-      pickedup: "pickedUp",
+      "picked-up": "picked-up",
+      pickedup: "picked-up",
+      pickedUp: "picked-up",
       "in-transit": "in-transit",
       intransit: "in-transit",
       delivered: "delivered",
       failed: "failed",
     };
     const incoming = String(req.body.deliveryStatus || "").toLowerCase();
-    const mapped = statusMap[incoming];
-    const valid = ["pending", "pickedUp", "in-transit", "delivered", "failed"];
+    const mapped = statusMap[incoming] || statusMap[req.body.deliveryStatus];
+    const valid = ["pending", "picked-up", "in-transit", "delivered", "failed"];
     if (!mapped || !valid.includes(mapped)) {
       return res
         .status(400)
