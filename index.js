@@ -12,7 +12,7 @@ const app = express();
    1) Config
 ========================= */
 const PORT = process.env.PORT || 5000;
-// Frontend origin (Firebase Hosting / Vercel) – env এ সেট দেবে
+// Frontend origin
 const CLIENT_ORIGIN =
   process.env.CLIENT_ORIGIN || "https://hurryup-e4338.web.app";
 
@@ -26,7 +26,7 @@ if (!MONGO_URI) {
 /* =========================
    1.1) Mailer (Resend)
 ========================= */
-// Note: Node 18+ এ global fetch আছে
+
 const mailer = (() => {
   const enabled =
     String(process.env.MAIL_ENABLED || "false").toLowerCase() === "true";
@@ -43,9 +43,6 @@ const mailer = (() => {
     console.warn("⚠️ Missing RESEND_API_KEY. Emails will fail. Set it in .env");
   }
   return {
-    /**
-     * send({ to, subject, html, text })
-     */
     send: async ({ to, subject, html, text }) => {
       try {
         const res = await fetch("https://api.resend.com/emails", {
@@ -66,53 +63,7 @@ const mailer = (() => {
   };
 })();
 
-/* ------- ছোট ইমেইল টেমপ্লেটগুলো ------- */
-// const emailTpl = {
-//   registration: (user) => `
-//     <div style="font-family:Arial">
-//       <h2>🎉 রেজিস্ট্রেশন সফল হয়েছে, ${user?.name || "ব্যবহারকারী"}!</h2>
-//       <p>আপনি HurryUp Express-এ সফলভাবে রেজিস্ট্রেশন করেছেন।</p>
-//       <p>একাউন্ট: <b>${user?.email || user?.phone || ""}</b></p>
-//       <hr/><small>ধন্যবাদ।</small>
-//     </div>`,
-
-//   bookingCreated: (bk) => `
-//     <div style="font-family:Arial">
-//       <h2>✅ বুকিং কনফার্মড</h2>
-//       <p>বুকিং আইডি: <b>${bk.bookingId}</b></p>
-//       <p>পিকআপ: ${bk.pickupAddress}</p>
-//       <p>ডেলিভারি: ${bk.deliveryAddress}</p>
-//       <p>স্ট্যাটাস: ${bk.status}</p>
-//       <p>মোট চার্জ: ${bk.totalCharge}৳ (ডেলিভারি চার্জ: ${bk.deliveryCharge}৳)</p>
-//       <hr/><small>লাইভ ট্র্যাকিংয়ের জন্য Track Parcel পেজ দেখুন।</small>
-//     </div>`,
-
-//   statusTransit: (bk) => `
-//     <div style="font-family:Arial">
-//       <h2>🚚 আপনার পার্সেল রওনা হয়েছে</h2>
-//       <p>বুকিং আইডি: <b>${bk.bookingId}</b></p>
-//       <p>এখন স্ট্যাটাস: <b>In-Transit</b></p>
-//       <p>এজেন্ট: ${bk?.deliveryAgent?.name || "Assigned"}</p>
-//       <hr/><small>লাইভ লোকেশন Track পেজে দেখুন।</small>
-//     </div>`,
-
-//   statusDelivered: (bk) => `
-//     <div style="font-family:Arial">
-//       <h2>📦 ডেলিভারি সম্পন্ন</h2>
-//       <p>বুকিং আইডি: <b>${bk.bookingId}</b></p>
-//       <p>স্ট্যাটাস: <b>Delivered</b></p>
-//       <hr/><small>ধন্যবাদ।</small>
-//     </div>`,
-
-//   statusFailed: (bk, reason) => `
-//     <div style="font-family:Arial">
-//       <h2>⚠️ ডেলিভারি ব্যর্থ</h2>
-//       <p>বুকিং আইডি: <b>${bk.bookingId}</b></p>
-//       <p>স্ট্যাটাস: <b>Failed</b></p>
-//       <p>কারণ: <b>${reason || "উল্লেখ নেই"}</b></p>
-//       <hr/><small>সাপোর্টের সাথে যোগাযোগ করুন।</small>
-//     </div>`,
-// };
+/* -------Tamplate ------- */
 
 const emailTpl = {
   registration: (user) => `
@@ -125,7 +76,7 @@ const emailTpl = {
           user?.email || user?.phone || ""
         }</b></p>
         <hr style="margin:20px 0;border:none;border-top:1px solid #e5e7eb"/>
-        <p style="font-size:13px;color:#6b7280">ধন্যবাদ আমাদের সাথে যুক্ত হওয়ার জন্য।</p>
+        <p style="font-size:13px;color:#6b7280">ধন্যবাদ আমাদের সাথে যুক্ত হওয়ার জন্য।</p>
       </div>
     </div>`,
 
@@ -146,7 +97,7 @@ const emailTpl = {
   statusTransit: (bk) => `
     <div style="font-family:Arial,sans-serif;background:#f9fafb;padding:20px">
       <div style="max-width:600px;margin:auto;background:white;border-radius:12px;padding:24px;box-shadow:0 4px 10px rgba(0,0,0,0.08)">
-        <h2 style="color:#f59e0b">🚚 আপনার পার্সেল রওনা হয়েছে</h2>
+        <h2 style="color:#f59e0b">🚚 আপনার পার্সেল রওনা হয়েছে</h2>
         <p>বুকিং আইডি: <b>${bk.bookingId}</b></p>
         <p>বর্তমান স্ট্যাটাস: <b style="color:#f59e0b">In-Transit</b></p>
         <p>এজেন্ট: <b>${bk?.deliveryAgent?.name || "Assigned"}</b></p>
@@ -185,8 +136,10 @@ const emailTpl = {
 app.use(express.json());
 app.use(
   cors({
-    origin: [CLIENT_ORIGIN],
+    origin: [CLIENT_ORIGIN, "http://localhost:5173", "http://localhost:3000"],
     credentials: true,
+    methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allowedHeaders: ["Content-Type", "Authorization"],
   })
 );
 
@@ -199,7 +152,9 @@ app.get("/", (req, res) => res.send("API OK"));
 const server = http.createServer(app);
 
 const io = new Server(server, {
-  cors: { origin: [CLIENT_ORIGIN] },
+  cors: {
+    origin: [CLIENT_ORIGIN, "http://localhost:5173", "http://localhost:3000"],
+  },
   transports: ["websocket", "polling"],
 });
 
@@ -302,14 +257,76 @@ app.get("/users", async (req, res) => {
   }
 });
 
+// FIXED: Updated PATCH /users/:id endpoint to handle UID and all profile fields
 app.patch("/users/:id", async (req, res) => {
-  const id = req.params.id;
-  const filter = { _id: new ObjectId(id) };
-  const { name, dob, photoUrl } = req.body;
-  const result = await usersCollection().updateOne(filter, {
-    $set: { name, dob, photoUrl },
-  });
-  res.send(result);
+  try {
+    const id = req.params.id;
+    let filter;
+
+    // Check if id is a valid ObjectId or use it as uid
+    if (ObjectId.isValid(id)) {
+      filter = { _id: new ObjectId(id) };
+    } else {
+      // Assume it's a Firebase UID
+      filter = { uid: id };
+    }
+
+    // Extract all possible profile fields from request body
+    const { name, phone, address, city, zipCode, dateOfBirth, dob, photoUrl } =
+      req.body;
+
+    // Build update object with only provided fields
+    const updateFields = {};
+    if (name !== undefined) updateFields.name = name;
+    if (phone !== undefined) updateFields.phone = phone;
+    if (address !== undefined) updateFields.address = address;
+    if (city !== undefined) updateFields.city = city;
+    if (zipCode !== undefined) updateFields.zipCode = zipCode;
+    if (dateOfBirth !== undefined) updateFields.dateOfBirth = dateOfBirth;
+    if (dob !== undefined) updateFields.dob = dob;
+    if (photoUrl !== undefined) updateFields.photoUrl = photoUrl;
+
+    // Add updatedAt timestamp
+    updateFields.updatedAt = new Date();
+
+    // Check if user exists
+    const existingUser = await usersCollection().findOne(filter);
+    if (!existingUser) {
+      return res.status(404).send({
+        success: false,
+        message: "User not found",
+      });
+    }
+
+    // Update user
+    const result = await usersCollection().updateOne(filter, {
+      $set: updateFields,
+    });
+
+    if (result.modifiedCount === 0) {
+      return res.status(400).send({
+        success: false,
+        message: "No changes were made to the profile",
+      });
+    }
+
+    // Return success response
+    res.status(200).send({
+      success: true,
+      message: "Profile updated successfully",
+      data: {
+        modifiedCount: result.modifiedCount,
+        updatedFields: Object.keys(updateFields),
+      },
+    });
+  } catch (error) {
+    console.error("Error updating user profile:", error);
+    res.status(500).send({
+      success: false,
+      message: "Failed to update profile",
+      error: error.message,
+    });
+  }
 });
 
 app.patch("/users", async (req, res) => {
@@ -368,7 +385,7 @@ app.post("/bookings", async (req, res) => {
 
     const result = await bookingsCollection().insertOne(booking);
 
-    // Booking confirmation email (তোমার data structure অনুযায়ী customer email = booking.email)
+    // Booking confirmation email (তোমার data structure অনুযায়ী customer email = booking.email)
     if (booking?.email) {
       await mailer.send({
         to: booking.email,
@@ -403,14 +420,14 @@ app.get("/bookings", async (req, res) => {
   res.status(200).send({ success: true, data: result, count: result.length });
 });
 
-// Get bookings by user uid (for dashboard lists)
+// Get bookings by user uid
 app.get("/bookings/:uid", async (req, res) => {
   const uid = req.params.uid;
   const result = await bookingsCollection().find({ uid }).toArray();
   res.send(result);
 });
 
-// Public tracking (ONE route only)
+// Public tracking
 app.get("/bookings/public/:trackingId", async (req, res) => {
   try {
     const trackingId = req.params.trackingId;
@@ -587,7 +604,7 @@ app.patch("/bookings/:id/deliveryStatus", async (req, res) => {
     });
 
     // ===== Email hooks =====
-    const emailTo = updated?.email; // তোমার ডাটায় customer email = booking.email
+    const emailTo = updated?.email; // তোমার ডাটায় customer email = booking.email
     if (emailTo) {
       if (updated.status === "in-transit") {
         await mailer.send({
@@ -731,7 +748,7 @@ app.get("/agent-requests", async (req, res) => {
   }
 });
 
-// Update agent request status (for admin approval/rejection)
+// Update agent request status
 app.patch("/agent-requests/:id/status", async (req, res) => {
   try {
     const requestId = req.params.id;
