@@ -6,27 +6,32 @@ require("dotenv").config();
 const { Server } = require("socket.io");
 const { MongoClient, ServerApiVersion, ObjectId } = require("mongodb");
 
+// Node<18 হলে fetch polyfill
+if (typeof fetch === "undefined") {
+  global.fetch = (...args) =>
+    import("node-fetch").then(({ default: fetch }) => fetch(...args));
+}
+
 const app = express();
 
-/* ================
-   1) Config
-========================= */
+/* ================ 1) Config ========================= */
 const PORT = process.env.PORT || 5000;
-// Frontend origin
 const CLIENT_ORIGIN =
   process.env.CLIENT_ORIGIN || "https://hurryup-e4338.web.app";
-
-// Mongo URI (Atlas)
 const MONGO_URI = process.env.MONGO_URI;
 if (!MONGO_URI) {
-  console.error("❌ Missing MONGO_URI. Set it in your .env / server env.");
+  console.error("❌ Missing MONGO_URI");
   process.exit(1);
 }
 
-/* =========================
-   1.1) Mailer (Resend)
-========================= */
+// allow both prod + local
+const ALLOWED_ORIGINS = [
+  CLIENT_ORIGIN,
+  "http://localhost:5173",
+  "http://127.0.0.1:5173",
+];
 
+/* ========================= 1.1) Mailer (Resend) ========================= */
 const mailer = (() => {
   const enabled =
     String(process.env.MAIL_ENABLED || "false").toLowerCase() === "true";
@@ -63,8 +68,7 @@ const mailer = (() => {
   };
 })();
 
-/* -------Tamplate ------- */
-
+/* ------- Templates ------- */
 const emailTpl = {
   registration: (user) => `
     <div style="font-family:Arial,sans-serif;background:#f9fafb;padding:20px">
@@ -79,7 +83,6 @@ const emailTpl = {
         <p style="font-size:13px;color:#6b7280">ধন্যবাদ আমাদের সাথে যুক্ত হওয়ার জন্য।</p>
       </div>
     </div>`,
-
   bookingCreated: (bk) => `
     <div style="font-family:Arial,sans-serif;background:#f9fafb;padding:20px">
       <div style="max-width:600px;margin:auto;background:white;border-radius:12px;padding:24px;box-shadow:0 4px 10px rgba(0,0,0,0.08)">
@@ -93,7 +96,6 @@ const emailTpl = {
         <p style="font-size:13px;color:#6b7280">লাইভ ট্র্যাকিং দেখতে <b>Track Parcel</b> পেজে যান।</p>
       </div>
     </div>`,
-
   statusTransit: (bk) => `
     <div style="font-family:Arial,sans-serif;background:#f9fafb;padding:20px">
       <div style="max-width:600px;margin:auto;background:white;border-radius:12px;padding:24px;box-shadow:0 4px 10px rgba(0,0,0,0.08)">
@@ -105,7 +107,6 @@ const emailTpl = {
         <p style="font-size:13px;color:#6b7280">আপনার পার্সেলের লাইভ লোকেশন <b>Track Parcel</b> পেজে দেখুন।</p>
       </div>
     </div>`,
-
   statusDelivered: (bk) => `
     <div style="font-family:Arial,sans-serif;background:#f9fafb;padding:20px">
       <div style="max-width:600px;margin:auto;background:white;border-radius:12px;padding:24px;box-shadow:0 4px 10px rgba(0,0,0,0.08)">
@@ -116,7 +117,6 @@ const emailTpl = {
         <p style="font-size:13px;color:#6b7280">আমাদের সার্ভিস ব্যবহারের জন্য ধন্যবাদ।</p>
       </div>
     </div>`,
-
   statusFailed: (bk, reason) => `
     <div style="font-family:Arial,sans-serif;background:#f9fafb;padding:20px">
       <div style="max-width:600px;margin:auto;background:white;border-radius:12px;padding:24px;box-shadow:0 4px 10px rgba(0,0,0,0.08)">
@@ -130,54 +130,86 @@ const emailTpl = {
     </div>`,
 };
 
-/* =========================
-   2) Middlewares
-========================= */
+/* ========================= 2) Middlewares ========================= */
+app.use(cors({ origin: ALLOWED_ORIGINS }));
 app.use(express.json());
-app.use(
-  cors({
-    origin: [CLIENT_ORIGIN, "http://localhost:5173", "http://localhost:3000"],
-    credentials: true,
-    methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-    allowedHeaders: ["Content-Type", "Authorization"],
-  })
-);
 
 // Health check
 app.get("/", (req, res) => res.send("API OK"));
 
-/* =========================
-   3) HTTP + Socket.IO
-========================= */
+/* ========================= 3) HTTP + Socket.IO ========================= */
 const server = http.createServer(app);
 
 const io = new Server(server, {
   cors: {
-    origin: [CLIENT_ORIGIN, "http://localhost:5173", "http://localhost:3000"],
+    origin: ALLOWED_ORIGINS,
+    methods: ["GET", "POST", "PATCH"],
   },
-  transports: ["websocket", "polling"],
 });
+
+/** In-memory last location cache for instant replay */
+const lastLocByBooking = new Map();
 
 io.on("connection", (socket) => {
   console.log("socket connected:", socket.id);
 
-  // Customer/Agent joins a booking room using bookingId (string)
-  socket.on("join:order", (bookingId) => {
+  // Customer/Agent joins booking room
+  socket.on("join:order", async (bookingId) => {
     if (!bookingId || typeof bookingId !== "string") return;
-    socket.join(`order:${bookingId}`);
-    console.log(`joined room order:${bookingId}`);
+    const room = `order:${bookingId}`;
+    socket.join(room);
+    console.log(`joined room ${room}`);
+
+    // 🔁 Immediately replay last known location (memory → Mongo fallback)
+    let last = lastLocByBooking.get(bookingId);
+    if (!last) {
+      try {
+        const doc = await bookingsCollection().findOne({ bookingId });
+        if (doc?.lastLocation?.lat && doc?.lastLocation?.lng) {
+          last = {
+            bookingId,
+            lat: Number(doc.lastLocation.lat),
+            lng: Number(doc.lastLocation.lng),
+            ts: Number(doc.lastLocation.ts) || Date.now(),
+          };
+          // warm cache
+          lastLocByBooking.set(bookingId, last);
+        }
+      } catch (e) {
+        console.warn("join:order lastLocation lookup failed:", e.message);
+      }
+    }
+    if (last) {
+      io.to(socket.id).emit("loc", last);
+    }
   });
 
-  // Agent sends live location
-  socket.on("loc", (payload) => {
+  // Agent live location
+  socket.on("loc", async (payload) => {
     const bookingId = payload?.bookingId;
     const lat = parseFloat(payload?.lat);
     const lng = parseFloat(payload?.lng);
     const ts = Number(payload?.ts) || Date.now();
-
     if (!bookingId || !Number.isFinite(lat) || !Number.isFinite(lng)) return;
 
-    io.to(`order:${bookingId}`).emit("loc", { bookingId, lat, lng, ts });
+    const room = `order:${bookingId}`;
+    const msg = { bookingId, lat, lng, ts };
+
+    // 1) emit to room
+    io.to(room).emit("loc", msg);
+
+    // 2) cache in memory (instant replay)
+    lastLocByBooking.set(bookingId, msg);
+
+    // 3) persist to Mongo (survive restarts)
+    try {
+      await bookingsCollection().updateOne(
+        { bookingId },
+        { $set: { lastLocation: { lat, lng, ts }, updatedAt: new Date() } }
+      );
+    } catch (e) {
+      console.warn("persist lastLocation failed:", e.message);
+    }
   });
 
   socket.on("disconnect", () => {
@@ -185,9 +217,7 @@ io.on("connection", (socket) => {
   });
 });
 
-/* =========================
-   4) Mongo
-========================= */
+/* ========================= 4) Mongo ========================= */
 const client = new MongoClient(MONGO_URI, {
   serverApi: {
     version: ServerApiVersion.v1,
@@ -200,9 +230,7 @@ const usersCollection = () => db().collection("users");
 const bookingsCollection = () => db().collection("bookings");
 const agentRequestsCollection = () => db().collection("agent-requests");
 
-/* =========================
-   5) Helpers
-========================= */
+/* ========================= 5) Helpers ========================= */
 const calculateDeliveryCharge = (zipCode, weight) => {
   let baseCharge = 160;
   const zip = parseInt(zipCode);
@@ -222,23 +250,11 @@ const calculateDeliveryCharge = (zipCode, weight) => {
   };
 };
 
-/* =========================
-   6) Routes
-========================= */
+/* ========================= 6) Routes ========================= */
 /* ---- Users ---- */
 app.post("/users", async (req, res) => {
   const user = req.body;
   const result = await usersCollection().insertOne(user);
-
-  // Registration email
-  if (user?.email) {
-    await mailer.send({
-      to: user.email,
-      subject: "Registration Successful – HurryUp Express",
-      html: emailTpl.registration(user),
-    });
-  }
-
   res.send(result);
 });
 
@@ -250,32 +266,23 @@ app.get("/users", async (req, res) => {
     if (role) query.role = role;
     const result = await usersCollection().find(query).toArray();
     res.status(200).send({ success: true, data: result, count: result.length });
-  } catch {
+  } catch (e) {
     res
       .status(500)
       .send({ success: false, message: "Failed to retrieve users" });
   }
 });
 
-// FIXED: Updated PATCH /users/:id endpoint to handle UID and all profile fields
+// PATCH /users/:id — supports Mongo _id or Firebase uid
 app.patch("/users/:id", async (req, res) => {
   try {
     const id = req.params.id;
     let filter;
+    if (ObjectId.isValid(id)) filter = { _id: new ObjectId(id) };
+    else filter = { uid: id };
 
-    // Check if id is a valid ObjectId or use it as uid
-    if (ObjectId.isValid(id)) {
-      filter = { _id: new ObjectId(id) };
-    } else {
-      // Assume it's a Firebase UID
-      filter = { uid: id };
-    }
-
-    // Extract all possible profile fields from request body
     const { name, phone, address, city, zipCode, dateOfBirth, dob, photoUrl } =
       req.body;
-
-    // Build update object with only provided fields
     const updateFields = {};
     if (name !== undefined) updateFields.name = name;
     if (phone !== undefined) updateFields.phone = phone;
@@ -285,24 +292,18 @@ app.patch("/users/:id", async (req, res) => {
     if (dateOfBirth !== undefined) updateFields.dateOfBirth = dateOfBirth;
     if (dob !== undefined) updateFields.dob = dob;
     if (photoUrl !== undefined) updateFields.photoUrl = photoUrl;
-
-    // Add updatedAt timestamp
     updateFields.updatedAt = new Date();
 
-    // Check if user exists
     const existingUser = await usersCollection().findOne(filter);
     if (!existingUser) {
-      return res.status(404).send({
-        success: false,
-        message: "User not found",
-      });
+      return res
+        .status(404)
+        .send({ success: false, message: "User not found" });
     }
 
-    // Update user
     const result = await usersCollection().updateOne(filter, {
       $set: updateFields,
     });
-
     if (result.modifiedCount === 0) {
       return res.status(400).send({
         success: false,
@@ -310,7 +311,6 @@ app.patch("/users/:id", async (req, res) => {
       });
     }
 
-    // Return success response
     res.status(200).send({
       success: true,
       message: "Profile updated successfully",
@@ -374,6 +374,7 @@ app.post("/bookings", async (req, res) => {
     );
     booking.deliveryCharge = calc.baseCharge;
     booking.totalCharge = calc.totalCharge;
+    booking.chargeBreakdown = calc;
 
     // ids & status
     booking.bookingId = `HurryUp${Date.now().toString().slice(-6)}${Math.floor(
@@ -381,23 +382,13 @@ app.post("/bookings", async (req, res) => {
     )}`;
     booking.createdAt = new Date();
     booking.status = "pending";
-    booking.chargeBreakdown = calc;
 
     const result = await bookingsCollection().insertOne(booking);
-
-    // Booking confirmation email (তোমার data structure অনুযায়ী customer email = booking.email)
-    if (booking?.email) {
-      await mailer.send({
-        to: booking.email,
-        subject: `Booking Confirmed – ${booking.bookingId}`,
-        html: emailTpl.bookingCreated(booking),
-      });
-    }
 
     res.status(201).send({
       success: true,
       data: {
-        ...result,
+        insertedId: result.insertedId,
         bookingId: booking.bookingId,
         chargeBreakdown: booking.chargeBreakdown,
       },
@@ -413,10 +404,14 @@ app.post("/bookings", async (req, res) => {
 app.get("/bookings", async (req, res) => {
   const { uid, status, id } = req.query;
   const query = {};
-  if (uid) query.uid = uid;
+  if (uid) query["deliveryAgent.uid"] = uid;
   if (status) query.status = status;
-  if (id) query._id = new ObjectId(id);
-  const result = await bookingsCollection().find(query).toArray();
+  if (id) query.bookingId = id;
+
+  const result = await bookingsCollection()
+    .find(query)
+    .sort({ createdAt: -1 })
+    .toArray();
   res.status(200).send({ success: true, data: result, count: result.length });
 });
 
@@ -427,31 +422,21 @@ app.get("/bookings/:uid", async (req, res) => {
   res.send(result);
 });
 
-// Public tracking
+// Public tracking (now includes lastLocation if present)
 app.get("/bookings/public/:trackingId", async (req, res) => {
   try {
-    const trackingId = req.params.trackingId;
+    const { trackingId } = req.params;
     const booking = await bookingsCollection().findOne({
       bookingId: trackingId,
     });
-    if (!booking) {
-      return res
-        .status(404)
-        .send({ success: false, message: "Tracking ID not found" });
-    }
+    if (!booking)
+      return res.status(404).send({ success: false, message: "Not found" });
 
-    // normalize
-    const normalizeStatus = (s = "") => {
-      const x = String(s).toLowerCase().trim();
-      if (["booked", "pending"].includes(x)) return "pending";
-      if (["pickup", "pickedup", "picked-up"].includes(x)) return "picked-up";
-      if (["intransit", "in-transit"].includes(x)) return "in-transit";
-      if (["deliverd", "delivered"].includes(x)) return "delivered";
-      if (["faild", "failed"].includes(x)) return "failed";
-      return "pending";
-    };
-    const statusRaw = booking.status || booking.deliveryStatus;
-    const status = normalizeStatus(statusRaw);
+    const normalize = (s) =>
+      (s || "").toString().toLowerCase().replace(/\s+/g, "-").replace("_", "-");
+    const status = normalize(
+      booking.deliveryStatus || booking.status || "pending"
+    );
 
     const publicData = {
       bookingId: booking.bookingId,
@@ -463,6 +448,7 @@ app.get("/bookings/public/:trackingId", async (req, res) => {
       parcelSize: booking.parcelSize,
       parcelWeight: booking.parcelWeight,
       createdAt: booking.createdAt,
+      lastLocation: booking.lastLocation || null, // 👈 added
       deliveryAgent: booking.deliveryAgent
         ? {
             name: booking.deliveryAgent.name,
@@ -471,6 +457,7 @@ app.get("/bookings/public/:trackingId", async (req, res) => {
         : null,
       updatedAt: booking.updatedAt,
     };
+
     res.status(200).send({ success: true, data: publicData });
   } catch (e) {
     res
@@ -483,7 +470,7 @@ app.get("/bookings/public/:trackingId", async (req, res) => {
 app.patch("/bookings/:id/assign-agent", async (req, res) => {
   try {
     const _id = req.params.id;
-    const { deliveryAgent, status } = req.body;
+    const { deliveryAgent } = req.body;
     if (!ObjectId.isValid(_id))
       return res
         .status(400)
@@ -550,83 +537,60 @@ app.patch("/bookings/:id/assign-agent", async (req, res) => {
   }
 });
 
-// Update delivery status
+// Update delivery status (whitelist + persist)
 app.patch("/bookings/:id/deliveryStatus", async (req, res) => {
   try {
-    const _id = req.params.id;
-    if (!ObjectId.isValid(_id))
+    const { id } = req.params;
+    const { deliveryStatus, failureReason } = req.body;
+    if (!deliveryStatus) {
       return res
         .status(400)
-        .send({ success: false, message: "Invalid booking ID" });
-
-    // normalize inputs - use consistent hyphenated status names
-    const statusMap = {
-      pending: "pending",
-      "picked-up": "picked-up",
-      pickedup: "picked-up",
-      pickedUp: "picked-up",
-      "in-transit": "in-transit",
-      intransit: "in-transit",
-      delivered: "delivered",
-      failed: "failed",
-    };
-    const incoming = String(req.body.deliveryStatus || "").toLowerCase();
-    const mapped = statusMap[incoming] || statusMap[req.body.deliveryStatus];
-    const valid = ["pending", "picked-up", "in-transit", "delivered", "failed"];
-    if (!mapped || !valid.includes(mapped)) {
-      return res
-        .status(400)
-        .send({ success: false, message: "Invalid deliveryStatus" });
+        .send({ success: false, message: "deliveryStatus required" });
     }
 
-    const $set = {
-      deliveryStatus: mapped,
-      status: mapped,
-      updatedAt: new Date(),
+    // whitelist statuses
+    const allowed = new Set([
+      "pending",
+      "picked-up",
+      "in-transit",
+      "delivered",
+      "failed",
+    ]);
+    const status = String(deliveryStatus).toLowerCase();
+    if (!allowed.has(status)) {
+      return res
+        .status(400)
+        .send({ success: false, message: "Invalid status value" });
+    }
+
+    const update = {
+      $set: {
+        deliveryStatus: status,
+        status, // alias
+        updatedAt: new Date(),
+      },
+      $unset: {},
     };
-    if (mapped === "failed") {
-      if (req.body.failureReason?.trim())
-        $set.failureReason = req.body.failureReason.trim();
-      $set.failedAt = new Date();
+    if (status === "failed" && failureReason) {
+      update.$set.failureReason = failureReason;
+      update.$set.failedAt = new Date();
+    } else {
+      update.$unset.failureReason = "";
+      update.$unset.failedAt = "";
     }
 
     const result = await bookingsCollection().updateOne(
-      { _id: new ObjectId(_id) },
-      { $set }
+      { _id: new ObjectId(id) },
+      update
     );
     if (!result.modifiedCount)
       return res
-        .status(400)
-        .send({ success: false, message: "Failed to update booking status" });
+        .status(404)
+        .send({ success: false, message: "Booking not found" });
 
     const updated = await bookingsCollection().findOne({
-      _id: new ObjectId(_id),
+      _id: new ObjectId(id),
     });
-
-    // ===== Email hooks =====
-    const emailTo = updated?.email; // তোমার ডাটায় customer email = booking.email
-    if (emailTo) {
-      if (updated.status === "in-transit") {
-        await mailer.send({
-          to: emailTo,
-          subject: `Your parcel is in-transit – ${updated.bookingId}`,
-          html: emailTpl.statusTransit(updated),
-        });
-      } else if (updated.status === "delivered") {
-        await mailer.send({
-          to: emailTo,
-          subject: `Delivered – ${updated.bookingId}`,
-          html: emailTpl.statusDelivered(updated),
-        });
-      } else if (updated.status === "failed") {
-        await mailer.send({
-          to: emailTo,
-          subject: `Delivery Failed – ${updated.bookingId}`,
-          html: emailTpl.statusFailed(updated, updated.failureReason),
-        });
-      }
-    }
-    // ===== /Email hooks =====
 
     res.status(200).send({
       success: true,
@@ -637,9 +601,10 @@ app.patch("/bookings/:id/deliveryStatus", async (req, res) => {
         failureReason: updated.failureReason,
         failedAt: updated.failedAt,
         updatedAt: updated.updatedAt,
+        lastLocation: updated.lastLocation || null,
       },
     });
-  } catch {
+  } catch (e) {
     res.status(500).send({ success: false, message: "Server error" });
   }
 });
@@ -649,7 +614,6 @@ app.post("/agent-requests", async (req, res) => {
   try {
     const agentRequest = req.body;
 
-    // Validate required fields
     const requiredFields = [
       "name",
       "phone",
@@ -657,7 +621,6 @@ app.post("/agent-requests", async (req, res) => {
       "vehicleType",
       "availability",
     ];
-
     for (const field of requiredFields) {
       if (!agentRequest[field]) {
         return res.status(400).send({
@@ -667,13 +630,11 @@ app.post("/agent-requests", async (req, res) => {
       }
     }
 
-    // Check if user already has a pending or approved request
     if (agentRequest.uid) {
       const existingRequest = await agentRequestsCollection().findOne({
         uid: agentRequest.uid,
         status: { $in: ["pending", "approved"] },
       });
-
       if (existingRequest) {
         return res.status(400).send({
           success: false,
@@ -682,12 +643,9 @@ app.post("/agent-requests", async (req, res) => {
       }
     }
 
-    // Generate unique request ID
     const requestId = `AGENT${Date.now().toString().slice(-6)}${Math.floor(
       Math.random() * 100
     )}`;
-
-    // Add request metadata
     agentRequest.requestId = requestId;
     agentRequest.createdAt = new Date();
     agentRequest.status = agentRequest.status || "pending";
@@ -696,10 +654,7 @@ app.post("/agent-requests", async (req, res) => {
     res.status(201).send({
       success: true,
       message: "Agent request submitted successfully",
-      data: {
-        ...result,
-        requestId: requestId,
-      },
+      data: { ...result, requestId },
     });
   } catch (error) {
     console.error("Error creating agent request:", error);
@@ -715,21 +670,9 @@ app.get("/agent-requests", async (req, res) => {
   try {
     const { uid, status, id } = req.query;
     let query = {};
-
-    // Filter by user ID if provided
-    if (uid) {
-      query.uid = uid;
-    }
-
-    // Filter by status if provided
-    if (status) {
-      query.status = status;
-    }
-
-    // Filter by specific request ID if provided
-    if (id) {
-      query._id = new ObjectId(id);
-    }
+    if (uid) query.uid = uid;
+    if (status) query.status = status;
+    if (id) query._id = new ObjectId(id);
 
     const result = await agentRequestsCollection().find(query).toArray();
     res.status(200).send({
@@ -753,16 +696,11 @@ app.patch("/agent-requests/:id/status", async (req, res) => {
   try {
     const requestId = req.params.id;
     const { status, reviewedBy, reviewNotes } = req.body;
+    if (!status)
+      return res
+        .status(400)
+        .send({ success: false, message: "Status is required" });
 
-    // Validate required fields
-    if (!status) {
-      return res.status(400).send({
-        success: false,
-        message: "Status is required",
-      });
-    }
-
-    // Validate status values
     const validStatuses = ["pending", "approved", "rejected"];
     if (!validStatuses.includes(status)) {
       return res.status(400).send({
@@ -772,19 +710,15 @@ app.patch("/agent-requests/:id/status", async (req, res) => {
         )}`,
       });
     }
-
-    // Validate request ID format
     if (!ObjectId.isValid(requestId)) {
-      return res.status(400).send({
-        success: false,
-        message: "Invalid request ID format",
-      });
+      return res
+        .status(400)
+        .send({ success: false, message: "Invalid request ID format" });
     }
 
-    // Update request status
     const updateDoc = {
       $set: {
-        status: status,
+        status,
         reviewedAt: new Date(),
         reviewedBy: reviewedBy || "admin",
         reviewNotes: reviewNotes || "",
@@ -796,14 +730,11 @@ app.patch("/agent-requests/:id/status", async (req, res) => {
       { _id: new ObjectId(requestId) },
       updateDoc
     );
-
     if (result.matchedCount === 0) {
-      return res.status(404).send({
-        success: false,
-        message: "Agent request not found",
-      });
+      return res
+        .status(404)
+        .send({ success: false, message: "Agent request not found" });
     }
-
     if (result.modifiedCount === 0) {
       return res.status(400).send({
         success: false,
@@ -811,12 +742,10 @@ app.patch("/agent-requests/:id/status", async (req, res) => {
       });
     }
 
-    // If approved, update user role to agent
     if (status === "approved") {
       const agentRequest = await agentRequestsCollection().findOne({
         _id: new ObjectId(requestId),
       });
-
       if (agentRequest && agentRequest.uid) {
         await usersCollection().updateOne(
           { uid: agentRequest.uid },
@@ -837,11 +766,9 @@ app.patch("/agent-requests/:id/status", async (req, res) => {
       }
     }
 
-    // Fetch updated request
     const updatedRequest = await agentRequestsCollection().findOne({
       _id: new ObjectId(requestId),
     });
-
     res.status(200).send({
       success: true,
       message: "Agent request status updated successfully",
@@ -867,25 +794,17 @@ app.get("/analytics/daily-bookings", async (req, res) => {
   try {
     const { startDate, endDate } = req.query;
     let matchStage = {};
-
-    // Filter by date range if provided
     if (startDate || endDate) {
       matchStage.createdAt = {};
-      if (startDate) {
-        matchStage.createdAt.$gte = new Date(startDate);
-      }
-      if (endDate) {
-        matchStage.createdAt.$lte = new Date(endDate);
-      }
+      if (startDate) matchStage.createdAt.$gte = new Date(startDate);
+      if (endDate) matchStage.createdAt.$lte = new Date(endDate);
     }
 
     const pipeline = [
       { $match: matchStage },
       {
         $group: {
-          _id: {
-            $dateToString: { format: "%Y-%m-%d", date: "$createdAt" },
-          },
+          _id: { $dateToString: { format: "%Y-%m-%d", date: "$createdAt" } },
           count: { $sum: 1 },
           totalAmount: { $sum: "$totalCharge" },
         },
@@ -894,7 +813,6 @@ app.get("/analytics/daily-bookings", async (req, res) => {
     ];
 
     const result = await bookingsCollection().aggregate(pipeline).toArray();
-
     res.status(200).send({
       success: true,
       message: "Daily bookings retrieved successfully",
@@ -913,16 +831,11 @@ app.get("/analytics/daily-bookings", async (req, res) => {
 app.get("/analytics/delivery-stats", async (req, res) => {
   try {
     const { startDate, endDate } = req.query;
-    let matchStage = {};
-    // Filter by date range if provided
+    const matchStage = {};
     if (startDate || endDate) {
       matchStage.createdAt = {};
-      if (startDate) {
-        matchStage.createdAt.$gte = new Date(startDate);
-      }
-      if (endDate) {
-        matchStage.createdAt.$lte = new Date(endDate);
-      }
+      if (startDate) matchStage.createdAt.$gte = new Date(startDate);
+      if (endDate) matchStage.createdAt.$lte = new Date(endDate);
     }
 
     const pipeline = [
@@ -934,17 +847,13 @@ app.get("/analytics/delivery-stats", async (req, res) => {
           delivered: {
             $sum: { $cond: [{ $eq: ["$status", "delivered"] }, 1, 0] },
           },
-          pending: {
-            $sum: { $cond: [{ $eq: ["$status", "pending"] }, 1, 0] },
-          },
+          pending: { $sum: { $cond: [{ $eq: ["$status", "pending"] }, 1, 0] } },
           inTransit: {
             $sum: { $cond: [{ $eq: ["$status", "in-transit"] }, 1, 0] },
           },
-          failed: {
-            $sum: { $cond: [{ $eq: ["$status", "failed"] }, 1, 0] },
-          },
+          failed: { $sum: { $cond: [{ $eq: ["$status", "failed"] }, 1, 0] } },
           pickedUp: {
-            $sum: { $cond: [{ $eq: ["$status", "pickedUp"] }, 1, 0] },
+            $sum: { $cond: [{ $eq: ["$status", "picked-up"] }, 1, 0] },
           },
         },
       },
@@ -960,20 +869,18 @@ app.get("/analytics/delivery-stats", async (req, res) => {
       pickedUp: 0,
     };
 
-    // Calculate success and failure rates
     const successful = stats.delivered;
     const failed = stats.total - stats.delivered;
-    const successRate =
-      stats.total > 0 ? ((successful / stats.total) * 100).toFixed(2) : 0;
+    const successRate = stats.total > 0 ? (successful / stats.total) * 100 : 0;
 
     res.status(200).send({
       success: true,
       message: "Delivery stats retrieved successfully",
       data: {
-        ...stats,
+        stats,
         successful,
         failed,
-        successRate: parseFloat(successRate),
+        successRate: Number(successRate.toFixed(2)),
       },
     });
   } catch (error) {
@@ -990,15 +897,10 @@ app.get("/analytics/cod-summary", async (req, res) => {
   try {
     const { startDate, endDate } = req.query;
     let matchStage = { paymentMethod: "cod" };
-    // Filter by date range if provided
     if (startDate || endDate) {
       matchStage.createdAt = {};
-      if (startDate) {
-        matchStage.createdAt.$gte = new Date(startDate);
-      }
-      if (endDate) {
-        matchStage.createdAt.$lte = new Date(endDate);
-      }
+      if (startDate) matchStage.createdAt.$gte = new Date(startDate);
+      if (endDate) matchStage.createdAt.$lte = new Date(endDate);
     }
 
     const pipeline = [
@@ -1053,14 +955,17 @@ app.get("/analytics/cod-summary", async (req, res) => {
   }
 });
 
-/* =========================
-   7) Start Server
-========================= */
+/* ========================= 7) Start Server ========================= */
 (async () => {
   try {
     await client.connect();
     server.listen(PORT, () => {
-      console.log("Server listening on", PORT, "origin:", CLIENT_ORIGIN);
+      console.log(
+        "Server listening on",
+        PORT,
+        "origin(s):",
+        ALLOWED_ORIGINS.join(", ")
+      );
     });
   } catch (e) {
     console.error("Failed to start server:", e);
