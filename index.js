@@ -23,12 +23,22 @@ if (!MONGO_URI) {
   process.exit(1);
 }
 
-// allow both prod + local
+// Enhanced CORS configuration with explicit origins
 const ALLOWED_ORIGINS = [
-  CLIENT_ORIGIN,
-  "http://localhost:5173",
-  "http://127.0.0.1:5173",
+  "https://hurryupexpress.netlify.app", // Production frontend
+  CLIENT_ORIGIN, // Environment variable fallback
+  "http://localhost:5173", // Local development
+  "http://127.0.0.1:5173", // Local development alternative
+  "http://localhost:3000", // Alternative local port
+  "https://localhost:5173", // HTTPS local (if needed)
 ];
+
+// Remove duplicates and filter out undefined/null values
+const UNIQUE_ORIGINS = [...new Set(ALLOWED_ORIGINS.filter(Boolean))];
+
+console.log("🌐 CORS Configuration:");
+console.log("CLIENT_ORIGIN from env:", CLIENT_ORIGIN);
+console.log("Allowed Origins:", UNIQUE_ORIGINS);
 
 /* ========================= 1.1) Mailer (Resend) ========================= */
 const mailer = (() => {
@@ -130,8 +140,58 @@ const emailTpl = {
 };
 
 /* ========================= 2) Middlewares ========================= */
-app.use(cors({ origin: ALLOWED_ORIGINS }));
+// Enhanced CORS configuration with debugging
+app.use(
+  cors({
+    origin: function (origin, callback) {
+      // Allow requests with no origin (like mobile apps or curl requests)
+      if (!origin) return callback(null, true);
+
+      console.log(`🔍 CORS check for origin: ${origin}`);
+
+      if (UNIQUE_ORIGINS.includes(origin)) {
+        console.log(`✅ CORS allowed for: ${origin}`);
+        return callback(null, true);
+      } else {
+        console.log(`❌ CORS blocked for: ${origin}`);
+        console.log(`📋 Allowed origins:`, UNIQUE_ORIGINS);
+        return callback(new Error("Not allowed by CORS"), false);
+      }
+    },
+    credentials: true,
+    methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allowedHeaders: [
+      "Content-Type",
+      "Authorization",
+      "X-Requested-With",
+      "Accept",
+      "Origin",
+    ],
+    exposedHeaders: ["Content-Range", "X-Content-Range"],
+  })
+);
+
 app.use(express.json());
+
+// Add explicit OPTIONS handler for preflight requests
+app.options("*", (req, res) => {
+  console.log(
+    `🔄 Preflight request from: ${req.get("Origin")} for ${req.method} ${
+      req.path
+    }`
+  );
+  res.header("Access-Control-Allow-Origin", req.get("Origin"));
+  res.header(
+    "Access-Control-Allow-Methods",
+    "GET,POST,PUT,PATCH,DELETE,OPTIONS"
+  );
+  res.header(
+    "Access-Control-Allow-Headers",
+    "Content-Type,Authorization,X-Requested-With,Accept,Origin"
+  );
+  res.header("Access-Control-Allow-Credentials", "true");
+  res.sendStatus(200);
+});
 
 // Health check
 app.get("/", (req, res) => res.send("API OK"));
@@ -141,8 +201,10 @@ const server = http.createServer(app);
 
 const io = new Server(server, {
   cors: {
-    origin: ALLOWED_ORIGINS,
-    methods: ["GET", "POST", "PATCH"],
+    origin: UNIQUE_ORIGINS,
+    methods: ["GET", "POST", "PATCH", "PUT", "DELETE"],
+    credentials: true,
+    allowedHeaders: ["Content-Type", "Authorization"],
   },
 });
 
@@ -959,12 +1021,9 @@ app.get("/analytics/cod-summary", async (req, res) => {
   try {
     await client.connect();
     server.listen(PORT, () => {
-      console.log(
-        "Server listening on",
-        PORT,
-        "origin(s):",
-        ALLOWED_ORIGINS.join(", ")
-      );
+      console.log("🚀 Server listening on port", PORT);
+      console.log("✅ CORS configured for origins:", UNIQUE_ORIGINS.join(", "));
+      console.log("📡 Socket.IO ready with CORS support");
     });
   } catch (e) {
     console.error("Failed to start server:", e);
