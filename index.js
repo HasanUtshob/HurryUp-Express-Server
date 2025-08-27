@@ -6,7 +6,6 @@ require("dotenv").config();
 const { Server } = require("socket.io");
 const { MongoClient, ServerApiVersion, ObjectId } = require("mongodb");
 
-// Node<18 হলে fetch polyfill
 if (typeof fetch === "undefined") {
   global.fetch = (...args) =>
     import("node-fetch").then(({ default: fetch }) => fetch(...args));
@@ -17,7 +16,7 @@ const app = express();
 /* ================ 1) Config ========================= */
 const PORT = process.env.PORT || 5000;
 const CLIENT_ORIGIN =
-  process.env.CLIENT_ORIGIN || "https://hurryup-e4338.web.app";
+  process.env.CLIENT_ORIGIN || "https://hurryupexpress.netlify.app";
 const MONGO_URI = process.env.MONGO_URI;
 if (!MONGO_URI) {
   console.error("❌ Missing MONGO_URI");
