@@ -6,6 +6,7 @@ require("dotenv").config();
 const { Server } = require("socket.io");
 const { MongoClient, ServerApiVersion, ObjectId } = require("mongodb");
 
+// Simple fetch polyfill for Node.js
 if (typeof fetch === "undefined") {
   global.fetch = (...args) =>
     import("node-fetch").then(({ default: fetch }) => fetch(...args));
